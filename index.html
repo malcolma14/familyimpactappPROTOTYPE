@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en-CA">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alignment Studio · Strategic Generosity Blueprint™</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23001E60'/%3E%3Ctext x='16' y='22' font-family='Nunito Sans, Calibri, sans-serif' font-size='17' font-weight='700' fill='%238DD0EF' text-anchor='middle'%3EA%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<div id="app" class="as-app">
+
+  <!-- ============ Header ============ -->
+  <header class="as-header">
+    <img src="assets/ig-logo.jpg" alt="IG Wealth Management" class="as-logo">
+    <div class="as-header-divider"></div>
+    <div class="as-header-title">
+      <span class="as-header-name">Alignment Studio</span>
+      <span class="as-header-brand">Strategic Generosity Blueprint™</span>
+    </div>
+    <div class="as-utility">
+      <span class="as-byline" id="byline"></span>
+      <button type="button" class="btn-util" data-action="print">Print or share</button>
+      <button type="button" class="btn-util as-mm-btn" id="mm-btn" data-action="toggle-meeting" aria-pressed="false">
+        <span class="as-mm-dot"></span>
+        Meeting mode
+      </button>
+    </div>
+  </header>
+
+  <div class="as-body">
+    <!-- ============ Left rail ============ -->
+    <nav class="as-rail" id="rail" aria-label="Acts"></nav>
+
+    <!-- ============ Main ============ -->
+    <main class="as-main">
+      <div class="as-content">
+        <div id="stepper-holder"></div>
+        <div id="screen"></div>
+      </div>
+    </main>
+  </div>
+
+  <!-- ============ Comparison drawer ============ -->
+  <div id="drawer-holder"></div>
+
+  <!-- ============ Mobile bottom nav ============ -->
+  <nav class="as-mnav" id="mnav" aria-label="Acts"></nav>
+
+  <!-- ============ Presenter footer (meeting mode) ============ -->
+  <div id="mm-footer-holder"></div>
+
+</div>
+<script src="js/app.js"></script>
+</body>
+</html>
