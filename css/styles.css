@@ -288,8 +288,13 @@ input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border-radius
 
 /* ============ Charts ============ */
 .as-barchart { display: block; max-width: 100%; }
-.as-lcchart { display: block; width: 100%; height: auto; }
+.as-lcchart { display: block; width: 100%; min-width: 860px; height: auto; }
 .as-lc-wrap { display: flex; flex-direction: column; gap: 12px; }
+/* The lifecycle chart's SVG text is sized for a ~860px render; below that
+   width its viewBox scaling would shrink the tooltip/axis text past
+   legibility (e.g. to a few CSS px on a phone-width card). Rather than
+   shrink the chart to fit, let it scroll horizontally at its designed size. */
+#lc-chart { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .as-lc-legend { display: flex; gap: 24px; flex-wrap: wrap; font-size: 12.5px; color: var(--soft-ink); font-weight: 600; }
 .as-lc-legend-item { display: inline-flex; align-items: center; gap: 8px; }
 .as-lc-swatch { display: inline-block; width: 14px; border-radius: 2px; }
