@@ -125,7 +125,12 @@
     recReaction: null,
     movedId: null,
     movedDir: 0,
-    visited: { welcome: true }
+    visited: { welcome: true },
+    pinnedChips: [],
+    hoverChip: null,
+    barHover: null,
+    hoverYear: null,
+    printing: false
   };
 
   try {
@@ -177,57 +182,146 @@
     return ORGS.some(function (o) { return state.journal[o.id] && state.journal[o.id].reaction; });
   }
 
+  // Shared currency formatter: below $1M formats in thousands ($540K),
+  // at or above $1M keeps the $X.XM / $XXM register. `v` is in millions.
+  function fmtM(v) {
+    if (v < 1) return '$' + Math.round(v * 1000) + 'K';
+    if (v >= 100) return '$' + Math.round(v) + 'M';
+    return '$' + v.toFixed(1) + 'M';
+  }
+
   // ---------- Charts ----------
   function barChartSvg(org) {
     var max = Math.max.apply(null, org.series);
-    var rects = '', labels = '';
+    var hoverI = (state.barHover && state.barHover.org === org.id) ? state.barHover.i : -1;
+    var rects = '', labels = '', valueLabel = '';
     org.series.forEach(function (v, i) {
       var h = Math.max(4, Math.round(v / max * 66));
-      rects += '<rect x="' + (10 + i * 48) + '" y="' + (74 - h) + '" width="34" height="' + h + '" rx="2" fill="#7A99AC"></rect>';
-      labels += '<text x="' + (27 + i * 48) + '" y="88" font-size="9" fill="#7A99AC" text-anchor="middle" font-family="Nunito Sans, sans-serif">' + (2020 + i) + '</text>';
+      var isHover = i === hoverI;
+      var year = 2020 + i;
+      rects += '<rect class="as-bar" data-org="' + org.id + '" data-i="' + i + '" x="' + (10 + i * 48) + '" y="' + (74 - h) + '" width="34" height="' + h + '" rx="2" fill="' + (isHover ? '#0072CE' : '#7A99AC') + '"><title>' + esc(year + ' revenue · ' + fmtM(v)) + '</title></rect>';
+      labels += '<text x="' + (27 + i * 48) + '" y="88" font-size="9" fill="' + (isHover ? '#0072CE' : '#7A99AC') + '" font-weight="' + (isHover ? '700' : '400') + '" text-anchor="middle" font-family="Nunito Sans, sans-serif">' + year + '</text>';
+      if (isHover) {
+        valueLabel = '<text x="' + (27 + i * 48) + '" y="102" font-size="10" font-weight="700" fill="#0072CE" text-anchor="middle" font-family="Nunito Sans, sans-serif">' + fmtM(v) + '</text>';
+      }
     });
-    return '<svg class="as-barchart" viewBox="0 0 260 92" width="260" height="92" role="img" aria-label="Bar chart of ' + esc(org.name) + ' total revenue from 2020 to 2024, rising each year to ' + esc(org.rev) + ' in 2024.">' + rects + labels + '</svg>';
+    return '<svg class="as-barchart" viewBox="0 0 260 108" width="260" height="108" role="img" aria-label="Bar chart of ' + esc(org.name) + ' total revenue from 2020 to 2024, rising each year to ' + esc(org.rev) + ' in 2024.">' + rects + labels + valueLabel + '</svg>';
   }
 
-  function lifecycleChartSvg(gen) {
-    var X0 = 40, X1 = 980, Y0 = 288, YTOP = 60;
-    function xFor(yr) { return X0 + (yr - 2025) / 75 * (X1 - X0); }
-    function val(yr) {
-      var sg = yr <= 2078 ? 26 : 12;
-      return Math.exp(-Math.pow(yr - 2078, 2) / (2 * sg * sg));
-    }
-    var pts = [];
-    for (var yr = 2025; yr <= 2100; yr += 1) pts.push([xFor(yr), Y0 - val(yr) * (Y0 - YTOP)]);
-    var lineD = pts.map(function (p, i) { return (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1); }).join(' ');
-    var areaD = lineD + ' L' + X1 + ' ' + Y0 + ' L' + X0 + ' ' + Y0 + ' Z';
-    var peakX = xFor(2078);
-    var peakY = Y0 - val(2078) * (Y0 - YTOP);
-    var bands = [
-      { label: 'Your watch', years: '2025 – 2050', from: 2025, to: 2050, fill: 'rgba(141,208,239,.18)' },
-      { label: 'Your children lead', years: '2050 – 2078', from: 2050, to: 2078, fill: 'rgba(122,153,172,.14)' },
-      { label: 'Grandchildren decide the ending', years: '2078 – 2100', from: 2078, to: 2100, fill: 'rgba(102,67,90,.10)' }
-    ];
+  // ---------- Lifecycle chart: dual-axis (assets line + distribution bars) ----------
+  var LC_X0 = 72, LC_X1 = 936, LC_Y0 = 300, LC_YTOP = 76, LC_A_MAX = 45, LC_D_MAX = 1.6;
+  function lcXFor(yr) { return LC_X0 + (yr - 2025) / 75 * (LC_X1 - LC_X0); }
+  function lcYForAssets(v) { return LC_Y0 - v / LC_A_MAX * (LC_Y0 - LC_YTOP); }
+  function lcYForDist(v) { return LC_Y0 - v / LC_D_MAX * (LC_Y0 - LC_YTOP); }
+
+  // Illustrative foundation model. Assets = balance (line, left axis);
+  // distributions = annual grants (bars, right axis).
+  function lcAssets(yr) {
+    function g(y) { var sg = y <= 2072 ? 26 : 20; return Math.exp(-Math.pow(y - 2072, 2) / (2 * sg * sg)); }
+    var g0 = g(2025);
+    return 16.5 + 24 * (g(yr) - g0) / (1 - g0);
+  }
+  function lcDist(yr) {
+    var sg = yr <= 2078 ? 26 : 12;
+    return 0.35 + Math.exp(-Math.pow(yr - 2078, 2) / (2 * sg * sg)) * 1.05;
+  }
+
+  var LC_A_LABELS = ['$0M', '$15M', '$30M', '$45M'];
+
+  function lcLegendHtml() {
+    return '<div class="as-lc-legend">' +
+      '<span class="as-lc-legend-item"><span class="as-lc-swatch as-lc-swatch-line"></span>Foundation assets · balance</span>' +
+      '<span class="as-lc-legend-item"><span class="as-lc-swatch as-lc-swatch-bar"></span>Annual distributions · grants</span>' +
+    '</div>';
+  }
+
+  function lcChartInnerSvg(gen, hoverYear) {
     var kids = '';
+
+    var bands = [
+      { label: 'Your watch', years: '2025 – 2050', from: 2025, to: 2050, fill: 'rgba(141,208,239,.14)' },
+      { label: 'Your children lead', years: '2050 – 2078', from: 2050, to: 2078, fill: 'rgba(122,153,172,.11)' },
+      { label: 'Grandchildren decide the ending', years: '2078 – 2100', from: 2078, to: 2100, fill: 'rgba(102,67,90,.08)' }
+    ];
     if (gen) {
+      var bandTop = LC_YTOP - 16, bandH = LC_Y0 - bandTop;
       bands.forEach(function (b, i) {
         var anchorEnd = i === 2;
-        var lx = anchorEnd ? xFor(b.to) - 10 : xFor(b.from) + 10;
+        var lx = anchorEnd ? lcXFor(b.to) - 10 : lcXFor(b.from) + 10;
         var anchor = anchorEnd ? 'end' : 'start';
-        kids += '<rect x="' + xFor(b.from).toFixed(1) + '" y="16" width="' + (xFor(b.to) - xFor(b.from)).toFixed(1) + '" height="272" fill="' + b.fill + '"></rect>';
-        kids += '<text x="' + lx.toFixed(1) + '" y="40" font-size="14" font-weight="700" fill="#001E60" text-anchor="' + anchor + '" font-family="Nunito Sans, sans-serif">' + b.label + '</text>';
-        kids += '<text x="' + lx.toFixed(1) + '" y="58" font-size="12" fill="#4A5560" text-anchor="' + anchor + '" font-family="Nunito Sans, sans-serif">' + b.years + '</text>';
+        kids += '<rect x="' + lcXFor(b.from).toFixed(1) + '" y="' + bandTop + '" width="' + (lcXFor(b.to) - lcXFor(b.from)).toFixed(1) + '" height="' + bandH + '" fill="' + b.fill + '"></rect>';
+        kids += '<text x="' + lx.toFixed(1) + '" y="' + (bandTop + 24) + '" font-size="14" font-weight="700" fill="#001E60" text-anchor="' + anchor + '" font-family="Nunito Sans, sans-serif">' + b.label + '</text>';
+        kids += '<text x="' + lx.toFixed(1) + '" y="' + (bandTop + 42) + '" font-size="12" fill="#4A5560" text-anchor="' + anchor + '" font-family="Nunito Sans, sans-serif">' + b.years + '</text>';
       });
     }
-    kids += '<path d="' + areaD + '" fill="rgba(0,114,206,.12)"></path>';
-    kids += '<path d="' + lineD + '" fill="none" stroke="#0072CE" stroke-width="2.5"></path>';
-    kids += '<line x1="' + peakX.toFixed(1) + '" y1="30" x2="' + peakX.toFixed(1) + '" y2="288" stroke="#001E60" stroke-width="1.5" stroke-dasharray="5 5"></line>';
-    kids += '<circle cx="' + peakX.toFixed(1) + '" cy="' + peakY.toFixed(1) + '" r="5" fill="#001E60"></circle>';
-    kids += '<text x="' + peakX.toFixed(1) + '" y="24" font-size="14" font-weight="700" fill="#001E60" text-anchor="middle" font-family="Nunito Sans, sans-serif">2078 · peak year</text>';
-    kids += '<line x1="' + X0 + '" y1="' + Y0 + '" x2="' + X1 + '" y2="' + Y0 + '" stroke="#E3EAF1" stroke-width="1.5"></line>';
-    [2025, 2040, 2055, 2070, 2085, 2100].forEach(function (yr2) {
-      kids += '<text x="' + xFor(yr2).toFixed(1) + '" y="312" font-size="12" fill="#7A99AC" text-anchor="middle" font-family="Nunito Sans, sans-serif">' + yr2 + '</text>';
+
+    // Left-axis gridlines + labels
+    [0, 15, 30, 45].forEach(function (v, i) {
+      var y = lcYForAssets(v);
+      kids += '<line x1="' + LC_X0 + '" y1="' + y.toFixed(1) + '" x2="' + LC_X1 + '" y2="' + y.toFixed(1) + '" stroke="#EDF2F7" stroke-width="1"></line>';
+      kids += '<text x="' + (LC_X0 - 10) + '" y="' + (y + 4).toFixed(1) + '" font-size="11" fill="#7A99AC" text-anchor="end" font-family="Nunito Sans, sans-serif">' + LC_A_LABELS[i] + '</text>';
     });
-    return '<svg class="as-lcchart" viewBox="0 0 1000 340" role="img" aria-label="Area chart of annual foundation distributions from 2025 to 2100, rising steadily to a peak in 2078 and easing through 2100. Generational bands can be overlaid.">' + kids + '</svg>';
+    // Right-axis labels (distributions) — sub-$1M ticks read in thousands via fmtM
+    [0, 0.8, 1.6].forEach(function (v) {
+      var y = lcYForDist(v);
+      kids += '<text x="' + (LC_X1 + 10) + '" y="' + (y + 4).toFixed(1) + '" font-size="11" fill="#0072CE" text-anchor="start" font-family="Nunito Sans, sans-serif">' + (v === 0 ? '$0' : fmtM(v)) + '</text>';
+    });
+
+    // Distribution bars, every 5 years
+    for (var by = 2025; by <= 2100; by += 5) {
+      var dv = lcDist(by);
+      var byY = lcYForDist(dv);
+      var isNear = hoverYear != null && Math.abs(by - hoverYear) <= 2;
+      kids += '<rect x="' + (lcXFor(by) - 8).toFixed(1) + '" y="' + byY.toFixed(1) + '" width="16" height="' + (LC_Y0 - byY).toFixed(1) + '" rx="2" fill="' + (isNear ? '#0072CE' : '#8DD0EF') + '"></rect>';
+    }
+
+    // Assets area + line
+    var aPts = [];
+    for (var yr = 2025; yr <= 2100; yr += 1) aPts.push([lcXFor(yr), lcYForAssets(lcAssets(yr))]);
+    var aLineD = aPts.map(function (p, i) { return (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1); }).join(' ');
+    kids += '<path d="' + aLineD + ' L' + LC_X1 + ' ' + LC_Y0 + ' L' + LC_X0 + ' ' + LC_Y0 + ' Z" fill="rgba(0,30,96,.06)"></path>';
+    kids += '<path d="' + aLineD + '" fill="none" stroke="#001E60" stroke-width="2.5"></path>';
+
+    // Peak marker (2078)
+    var peakX = lcXFor(2078);
+    kids += '<line x1="' + peakX.toFixed(1) + '" y1="' + (LC_YTOP - 6) + '" x2="' + peakX.toFixed(1) + '" y2="' + LC_Y0 + '" stroke="#66435A" stroke-width="1.5" stroke-dasharray="5 5"></line>';
+    kids += '<text x="' + peakX.toFixed(1) + '" y="' + (LC_YTOP - 12) + '" font-size="13" font-weight="700" fill="#66435A" text-anchor="middle" font-family="Nunito Sans, sans-serif">Distributions peak · 2078</text>';
+
+    // Baseline + x-axis year labels
+    kids += '<line x1="' + LC_X0 + '" y1="' + LC_Y0 + '" x2="' + LC_X1 + '" y2="' + LC_Y0 + '" stroke="#E3EAF1" stroke-width="1.5"></line>';
+    [2025, 2040, 2055, 2070, 2085, 2100].forEach(function (yr2) {
+      kids += '<text x="' + lcXFor(yr2).toFixed(1) + '" y="' + (LC_Y0 + 24) + '" font-size="12" fill="#7A99AC" text-anchor="middle" font-family="Nunito Sans, sans-serif">' + yr2 + '</text>';
+    });
+
+    // Axis titles
+    kids += '<text x="' + LC_X0 + '" y="' + (LC_YTOP - 24) + '" font-size="12" font-weight="700" fill="#001E60" text-anchor="start" font-family="Nunito Sans, sans-serif">Assets</text>';
+    kids += '<text x="' + LC_X1 + '" y="' + (LC_YTOP - 24) + '" font-size="12" font-weight="700" fill="#0072CE" text-anchor="end" font-family="Nunito Sans, sans-serif">Grants</text>';
+
+    // Hover guide + dot + tooltip (fixed near the top so it doesn't jump as the curve rises/falls)
+    if (hoverYear != null) {
+      var hx = lcXFor(hoverYear);
+      var hy = lcYForAssets(lcAssets(hoverYear));
+      kids += '<line x1="' + hx.toFixed(1) + '" y1="' + (LC_YTOP - 16) + '" x2="' + hx.toFixed(1) + '" y2="' + LC_Y0 + '" stroke="#C9DBEF" stroke-width="1"></line>';
+      kids += '<circle cx="' + hx.toFixed(1) + '" cy="' + hy.toFixed(1) + '" r="5" fill="#001E60" stroke="#fff" stroke-width="2"></circle>';
+      var tw = 176, th = 66;
+      var tx = Math.min(Math.max(hx - tw / 2, LC_X0), LC_X1 - tw);
+      var ty = LC_YTOP - 8;
+      kids += '<g>' +
+        '<rect x="' + tx.toFixed(1) + '" y="' + ty.toFixed(1) + '" width="' + tw + '" height="' + th + '" rx="8" fill="#001E60"></rect>' +
+        '<text x="' + (tx + 14).toFixed(1) + '" y="' + (ty + 22).toFixed(1) + '" font-size="14" font-weight="700" fill="#FFFFFF" font-family="Nunito Sans, sans-serif">' + hoverYear + '</text>' +
+        '<text x="' + (tx + 14).toFixed(1) + '" y="' + (ty + 41).toFixed(1) + '" font-size="12" fill="#8DD0EF" font-family="Nunito Sans, sans-serif">Assets  ' + fmtM(lcAssets(hoverYear)) + '</text>' +
+        '<text x="' + (tx + 14).toFixed(1) + '" y="' + (ty + 57).toFixed(1) + '" font-size="12" fill="#8DD0EF" font-family="Nunito Sans, sans-serif">Grant this year  ' + fmtM(lcDist(hoverYear)) + '</text>' +
+      '</g>';
+    }
+
+    // Transparent hover-capture rect, must be last (topmost) to receive pointer events
+    kids += '<rect id="lc-capture" x="' + LC_X0 + '" y="' + (LC_YTOP - 16) + '" width="' + (LC_X1 - LC_X0) + '" height="' + (LC_Y0 - (LC_YTOP - 16)) + '" fill="transparent"></rect>';
+
+    return '<svg class="as-lcchart" viewBox="0 0 1008 340" role="img" aria-label="Dual-axis chart. A navy line shows illustrative foundation assets rising from $16.5M in 2025 to about $40M around 2072, then easing to roughly $22M by 2100. Light-blue bars show annual distributions on a separate right-hand scale, peaking in 2078. Hover any year for exact figures.">' + kids + '</svg>';
+  }
+
+  function lifecycleChartSvg(gen, hoverYear) {
+    return '<div class="as-lc-wrap">' + lcLegendHtml() + '<div id="lc-chart">' + lcChartInnerSvg(gen, hoverYear) + '</div></div>';
   }
 
   // ---------- Screen builders ----------
@@ -258,13 +352,29 @@
   }
 
   function chipHintHtml() {
-    return '<span class="as-chip-hint">Hover a chip above to see where it influenced the scoring in act two.</span>';
+    return '<span class="as-chip-hint">Hover — or click to pin — a chip above to see where it influenced the scoring in act two.</span>';
+  }
+
+  // Prefers the actively hovered chip; falls back to the first pinned chip
+  // in fixed CHIP_GROUPS order (not most-recently-clicked) so the panel
+  // stays predictable when several chips are pinned at once.
+  function chipPanelHtml() {
+    var chip = state.hoverChip ? findChip(state.hoverChip) : null;
+    if (!chip) {
+      for (var g = 0; g < CHIP_GROUPS.length && !chip; g++) {
+        for (var i = 0; i < CHIP_GROUPS[g].chips.length; i++) {
+          if (state.pinnedChips.indexOf(CHIP_GROUPS[g].chips[i].id) !== -1) { chip = CHIP_GROUPS[g].chips[i]; break; }
+        }
+      }
+    }
+    return chip ? '<span class="as-chip-info"><strong>' + esc(chip.label) + '</strong> — ' + chipInfoFor(chip) + '</span>' : chipHintHtml();
   }
 
   function youHtml() {
     var groups = CHIP_GROUPS.map(function (g) {
       var chips = g.chips.map(function (c) {
-        return '<span class="as-chip" tabindex="0" data-chip="' + c.id + '">' + esc(c.label) + '</span>';
+        var pinned = state.pinnedChips.indexOf(c.id) !== -1;
+        return '<button type="button" class="as-chip' + (pinned ? ' on' : '') + '" data-chip="' + c.id + '" data-action="toggle-chip-pin" aria-pressed="' + pinned + '">' + esc(c.label) + '</button>';
       }).join('');
       return '<div><div class="as-chip-group-title">' + esc(g.title) + '</div><div class="as-chips">' + chips + '</div></div>';
     }).join('');
@@ -272,10 +382,10 @@
       '<section class="as-screen" data-screen-label="Act 1 - You">' +
         '<div class="as-eyebrow">Act one · You</div>' +
         '<h1 class="as-title">The mirror</h1>' +
-        '<p class="as-lede">Everything in this studio is scored against this page. Hover any chip to see where it shaped the work.</p>' +
+        '<p class="as-lede">Everything in this studio is scored against this page. Hover any chip to see where it shaped the work — or click to keep it pinned.</p>' +
         '<div class="as-you-stack">' +
           groups +
-          '<div class="as-chip-panel" id="chip-panel">' + chipHintHtml() + '</div>' +
+          '<div class="as-chip-panel" id="chip-panel">' + chipPanelHtml() + '</div>' +
           '<div class="as-card">' +
             '<div class="as-label">Capacity</div>' +
             '<div class="as-capacity-line">A few hours per month · Toronto-area boards</div>' +
@@ -328,7 +438,7 @@
     var badge = BADGES[org.fit];
     var moved = state.movedId === org.id;
     var movedLabel = moved ? (state.movedDir > 0 ? 'moved up' : 'moved down') : '';
-    var expanded = state.expanded === org.id;
+    var expanded = state.printing || state.expanded === org.id;
     var facts = [
       { value: org.rev, label: '2024 revenue', cite: 'T3010', source: 'CRA T3010 filing, 2024' },
       { value: org.eff, label: 'program efficiency', cite: 'T3010', source: 'CRA T3010 filing, 2024 — program spending over total spending' },
@@ -356,7 +466,7 @@
             '</div>' +
             '<div>' +
               '<div class="as-label">Five years of revenue · T3010</div>' +
-              '<div>' + barChartSvg(org) + '</div>' +
+              '<div id="bar-chart-' + org.id + '">' + barChartSvg(org) + '</div>' +
               '<div class="as-chartnote">2024 revenue ' + esc(org.rev) + ' · program efficiency ' + esc(org.eff) + '</div>' +
             '</div>' +
             '<div>' +
@@ -456,7 +566,7 @@
             '<h2 class="as-card-h">Annual distributions, 2025 – 2100</h2>' +
             '<button type="button" class="btn-pill' + (state.gen ? ' on' : '') + '" data-action="toggle-gen" aria-pressed="' + state.gen + '">' + (state.gen ? 'Hide the generations' : 'Show the generations') + '</button>' +
           '</div>' +
-          '<div>' + lifecycleChartSvg(state.gen) + '</div>' +
+          '<div>' + lifecycleChartSvg(state.gen || state.printing, state.hoverYear) + '</div>' +
           genNote +
           '<p class="as-disclaimer">Illustrative model only. No products are named here, and no returns are projected to you.</p>' +
         '</div>' +
@@ -568,6 +678,7 @@
   }
 
   function screenHtml() {
+    if (state.printing) return welcomeHtml() + youHtml() + serveHtml() + giveHtml() + decideHtml();
     switch (state.screen) {
       case 'you': return youHtml();
       case 'serve': return serveHtml();
@@ -706,12 +817,48 @@
     if (cards) cards.innerHTML = rankedCardsHtml();
   }
 
+  function updateBarChart(orgId) {
+    var el = document.getElementById('bar-chart-' + orgId);
+    if (el) el.innerHTML = barChartSvg(orgById(orgId));
+  }
+
+  function updateLifecycleChart() {
+    var el = document.getElementById('lc-chart');
+    if (el) el.innerHTML = lcChartInnerSvg(state.gen || state.printing, state.hoverYear);
+  }
+
   function goTo(screen) {
     state.screen = screen;
     state.visited[screen] = true;
     render();
     window.scrollTo({ top: 0, behavior: 'auto' });
   }
+
+  // Print: force-render every act, expand every dossier, then restore
+  // whatever the user had open. afterprint is the primary reset trigger;
+  // the timeout is a backstop for browsers that never fire it.
+  var printResetTimer = null;
+  var printSnapshotExpanded;
+
+  function endPrinting() {
+    if (printResetTimer) { clearTimeout(printResetTimer); printResetTimer = null; }
+    if (!state.printing) return;
+    state.printing = false;
+    state.expanded = printSnapshotExpanded;
+    render();
+  }
+
+  function doPrint() {
+    printSnapshotExpanded = state.expanded;
+    state.printing = true;
+    render();
+    setTimeout(function () {
+      window.print();
+      printResetTimer = setTimeout(endPrinting, 400);
+    }, 80);
+  }
+
+  window.addEventListener('afterprint', endPrinting);
 
   // ---------- Events ----------
   document.addEventListener('click', function (e) {
@@ -721,7 +868,7 @@
     if (a === 'goto') {
       goTo(el.dataset.screen);
     } else if (a === 'print') {
-      window.print();
+      doPrint();
     } else if (a === 'toggle-meeting') {
       state.mm = !state.mm;
       render();
@@ -761,6 +908,15 @@
     } else if (a === 'clear-pins') {
       state.pinned = [];
       render();
+    } else if (a === 'toggle-chip-pin') {
+      var cid = el.dataset.chip;
+      var ci = state.pinnedChips.indexOf(cid);
+      if (ci === -1) state.pinnedChips.push(cid); else state.pinnedChips.splice(ci, 1);
+      render();
+      // render() replaces the entire chip button with a new DOM node, which
+      // drops keyboard focus — restore it so repeated Enter/Space toggling works.
+      var refocus = document.querySelector('[data-chip="' + cid + '"]');
+      if (refocus) refocus.focus();
     }
   });
 
@@ -813,23 +969,41 @@
 
   function chipEnter(el) {
     var chip = findChip(el.dataset.chip);
+    if (!chip) return;
+    state.hoverChip = chip.id;
     var panel = document.getElementById('chip-panel');
-    if (!chip || !panel) return;
-    panel.innerHTML = '<span class="as-chip-info"><strong>' + esc(chip.label) + '</strong> — ' + chipInfoFor(chip) + '</span>';
+    if (panel) panel.innerHTML = chipPanelHtml();
   }
 
   function chipLeave() {
+    state.hoverChip = null;
     var panel = document.getElementById('chip-panel');
-    if (panel) panel.innerHTML = chipHintHtml();
+    if (panel) panel.innerHTML = chipPanelHtml();
   }
 
   document.addEventListener('mouseover', function (e) {
     var c = e.target.closest && e.target.closest('.as-chip');
-    if (c) chipEnter(c);
+    if (c) { chipEnter(c); return; }
+    var bar = e.target.closest && e.target.closest('.as-bar');
+    if (bar) {
+      var oid = bar.dataset.org, bi = Number(bar.dataset.i);
+      if (!(state.barHover && state.barHover.org === oid && state.barHover.i === bi)) {
+        state.barHover = { org: oid, i: bi };
+        updateBarChart(oid);
+      }
+    }
   });
   document.addEventListener('mouseout', function (e) {
     var c = e.target.closest && e.target.closest('.as-chip');
-    if (c && !(e.relatedTarget && c.contains(e.relatedTarget))) chipLeave();
+    if (c) { if (!(e.relatedTarget && c.contains(e.relatedTarget))) chipLeave(); return; }
+    var bar = e.target.closest && e.target.closest('.as-bar');
+    if (bar) {
+      if (!(e.relatedTarget && bar.contains(e.relatedTarget)) && state.barHover) {
+        var oid = bar.dataset.org;
+        state.barHover = null;
+        updateBarChart(oid);
+      }
+    }
   });
   document.addEventListener('focusin', function (e) {
     var c = e.target.closest && e.target.closest('.as-chip');
@@ -838,6 +1012,25 @@
   document.addEventListener('focusout', function (e) {
     var c = e.target.closest && e.target.closest('.as-chip');
     if (c) chipLeave();
+  });
+
+  document.addEventListener('mousemove', function (e) {
+    var capture = e.target.closest && e.target.closest('#lc-capture');
+    if (!capture) return;
+    var box = capture.getBoundingClientRect();
+    var frac = (e.clientX - box.left) / box.width;
+    var yr = Math.round(2025 + Math.max(0, Math.min(1, frac)) * 75);
+    if (yr !== state.hoverYear) {
+      state.hoverYear = yr;
+      updateLifecycleChart();
+    }
+  });
+  document.addEventListener('mouseout', function (e) {
+    var capture = e.target.closest && e.target.closest('#lc-capture');
+    if (capture && !(e.relatedTarget && capture.contains(e.relatedTarget)) && state.hoverYear !== null) {
+      state.hoverYear = null;
+      updateLifecycleChart();
+    }
   });
 
   // ---------- Boot ----------
